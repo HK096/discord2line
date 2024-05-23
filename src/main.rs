@@ -1,15 +1,22 @@
-#![windows_subsystem = "windows"] //コマンドプロンプトを表示しない
+// #![windows_subsystem = "windows"] //コマンドプロンプトを表示しない
 use dotenv::dotenv;
 use reqwest::Client as HttpClient;
 use serde::Deserialize;
+use serenity::all::ChannelId;
 use serenity::async_trait;
 use serenity::model::channel::Message;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
 use std::collections::HashMap;
 use std::env;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
-struct Handler;
+struct Handler {
+    last_notification_time: Arc<Mutex<HashMap<ChannelId, Instant>>>,
+    notification_interval: Duration,
+}
 
 #[async_trait]
 impl EventHandler for Handler {
@@ -24,33 +31,45 @@ impl EventHandler for Handler {
             return;
         }
 
-        let link = msg.link();
+        let mut last_notification_time = self.last_notification_time.lock().await;
         let channel_id = msg.channel_id;
-        let channel_name = match channel_id.to_channel(&ctx.http).await {
-            Ok(channel) => channel.guild().map(|c| c.name).unwrap_or_default(),
-            Err(_) => String::from("Unknown channel"),
-        };
-        let content = msg.content;
 
-        let message_url = match shorten(&link).await {
-            Ok(shortened) => shortened,
-            Err(_) => link.clone(),
+        let should_notify = match last_notification_time.get(&channel_id) {
+            Some(&last_time) => last_time.elapsed() >= self.notification_interval,
+            None => true,
         };
 
-        let mut nick_name = msg.author.name.clone();
-        if let Some(guild_id) = msg.guild_id {
-            if let Ok(member) = guild_id.member(&ctx.http, msg.author.id).await {
-                if let Some(nick) = member.nick {
-                    nick_name = nick;
+        if should_notify {
+            let link = msg.link();
+            let channel_id = msg.channel_id;
+            let channel_name = match channel_id.to_channel(&ctx.http).await {
+                Ok(channel) => channel.guild().map(|c| c.name).unwrap_or_default(),
+                Err(_) => String::from("Unknown channel"),
+            };
+            let content = msg.content;
+
+            let message_url = match shorten(&link).await {
+                Ok(shortened) => shortened,
+                Err(_) => link.clone(),
+            };
+
+            let mut nick_name = msg.author.name.clone();
+            if let Some(guild_id) = msg.guild_id {
+                if let Ok(member) = guild_id.member(&ctx.http, msg.author.id).await {
+                    if let Some(nick) = member.nick {
+                        nick_name = nick;
+                    }
                 }
             }
-        }
-        let response = format!(
-            "\n{}で{}からの発言\n--------\n{}\n-------- {}",
-            channel_name, nick_name, content, message_url
-        );
+            let response = format!(
+                "\n{}で{}からの発言\n--------\n{}\n-------- {}",
+                channel_name, nick_name, content, message_url
+            );
 
-        get_msg(response).await;
+            get_msg(response).await;
+
+            last_notification_time.insert(channel_id, Instant::now());
+        }
     }
     async fn ready(&self, _: Context, ready: Ready) {
         println!("{} is connected!", ready.user.name);
@@ -120,8 +139,13 @@ async fn main() {
         | GatewayIntents::DIRECT_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT;
 
+    let handler = Handler {
+        last_notification_time: Arc::new(Mutex::new(HashMap::new())),
+        notification_interval: Duration::from_secs(60),
+    };
+
     let mut client = Client::builder(discord_token, intents)
-        .event_handler(Handler)
+        .event_handler(handler)
         .await
         .expect("Err creating client");
 
