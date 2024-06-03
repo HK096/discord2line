@@ -1,4 +1,4 @@
-// #![windows_subsystem = "windows"] //コマンドプロンプトを表示しない
+#![windows_subsystem = "windows"] //コマンドプロンプトを表示しない
 use dotenv::dotenv;
 use reqwest::Client as HttpClient;
 use serde::Deserialize;
@@ -12,6 +12,7 @@ use std::env;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use unicode_segmentation::UnicodeSegmentation;
 
 struct Handler {
     last_notification_time: Arc<Mutex<HashMap<ChannelId, Instant>>>,
@@ -46,7 +47,10 @@ impl EventHandler for Handler {
                 Ok(channel) => channel.guild().map(|c| c.name).unwrap_or_default(),
                 Err(_) => String::from("Unknown channel"),
             };
-            let content = msg.content;
+            let content = remove_emoji(&msg.content).await;
+            if content.is_empty() {
+                return;
+            }
 
             let message_url = match shorten(&link).await {
                 Ok(shortened) => shortened,
@@ -74,6 +78,12 @@ impl EventHandler for Handler {
     async fn ready(&self, _: Context, ready: Ready) {
         println!("{} is connected!", ready.user.name);
     }
+}
+
+async fn remove_emoji(string: &str) -> String {
+    let graphemes = string.graphemes(true);
+    let is_not_emoji = |x: &&str| emojis::get(x).is_none();
+    graphemes.filter(is_not_emoji).collect()
 }
 
 async fn shorten(url: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -141,7 +151,7 @@ async fn main() {
 
     let handler = Handler {
         last_notification_time: Arc::new(Mutex::new(HashMap::new())),
-        notification_interval: Duration::from_secs(60),
+        notification_interval: Duration::from_secs(120),
     };
 
     let mut client = Client::builder(discord_token, intents)
