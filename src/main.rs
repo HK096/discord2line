@@ -9,6 +9,8 @@ use serenity::model::gateway::Ready;
 use serenity::prelude::*;
 use std::collections::HashMap;
 use std::env;
+use std::fs::File;
+use std::io::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -115,6 +117,7 @@ async fn get_msg(msg: String) {
     }
 }
 
+// send message to line
 async fn send(msg: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use reqwest::{header, Client};
 
